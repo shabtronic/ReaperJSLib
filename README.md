@@ -2,7 +2,7 @@
 Handy lib for reaper JS plugins - UI and General DSP code
 
 
-Hold ctrl and right mouse click to toggle UI grid!
+Hold ctrl and Left mouse click to toggle UI grid!
 
 Example how to use this lib is here: 
 
