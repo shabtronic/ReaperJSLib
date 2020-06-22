@@ -50,17 +50,17 @@ DelayLines=getmem(MaxDelays,MaxDelaySize);
 
 // Sliders  **************************************************************************************
 
-function AddSlider(name,v,vmin,vmax,flags,hoverhint)
+function AddSlider(name,defaultvalue,vmin,vmax,flags,hoverhint)
 (
 SliderCount<256?
 (
 strcpy(SliderCount,name);
 strcpy(SliderCount+256,hoverhint);
-Sliders[SliderCount*4+0]=v;
+Sliders[SliderCount*4+0]=defaultvalue;
 Sliders[SliderCount*4+1]=vmin;
 Sliders[SliderCount*4+2]=vmax;
 Sliders[SliderCount*4+3]=flags; // 0=float 1=int 2=hz 3=display% 4=secs
-slider(SliderCount+1)=v;
+slider(SliderCount+1)=defaultvalue;
 sliderchange(SliderCount+1);
 SliderCount+=1;
 );
@@ -74,7 +74,7 @@ function AddSliderTime(name,v,vmin,vmax,hoverhint)  (AddSlider(name,v,vmin,vmax,
 
 
 // Delays **************************************************************************************
-function DelayCleanUp(idx,t)
+function DelayCleanUp(idx,t) local(ot)
 (
 ot=DelayParams[idx*4+2];
 /*
@@ -86,7 +86,29 @@ while (ot<t)
 DelayParams[idx*4+2]=ot;
 );
 
-function AllPassDelay(idx,in,t,g)
+
+// Simple Ring Buffer pitch shifter
+// Fixed size 32768!
+// Cheap and cheerful - has the terrible steel drum sound!
+// Uses 1 delay line
+function PitchShift(idx,in,shiftamount)
+(
+dsize=4096;
+mask=(dsize*2)-1;
+Delay=DelayLines+(idx*MaxDelaySize);
+WP=DelayParams[idx*4+0];
+Delay[WP&mask]=in;
+RP=(WP*shiftamount); // synchronised with read pointer!
+WP=(WP+1);
+DelayParams[idx*4+0]=WP;
+ip=floor(RP);
+fp=RP-ip;
+ps1=Delay[ip&mask]*(1.0-fp)+Delay[(ip+1)&mask]*fp;
+ps2=Delay[(ip+dsize)&mask]*(1.0-fp)+Delay[(ip+1+dsize)&mask]*fp;
+d1=(RP-WP);
+SinWindow[d1&mask]*ps1+SinWindow[(d1+dsize)&mask]*ps2;
+);
+function AllPassDelay(idx,in,t,g) local(out,yy)
 (
 Delay=DelayLines+(idx*MaxDelaySize);
 DP=DelayParams[idx*4+0];
@@ -142,7 +164,15 @@ out;
 // Dsp stuff **************************************************************************************
 
 
-
+function CreateSinWindow(w,wsize) local(x)
+(
+x=0;
+while (x<wsize)
+  (
+  w[x]=sin(x/wsize*$pi);
+  x+=1;
+  );
+);
 
 function BiquadInit()  ( this.l1=this.l2=this.a1=this.a2=this.b0=this.b1=this.b2=0;);
 function IIRFreq(f)  ( this.fc=(f/srate)/((f/srate)+1););
@@ -153,7 +183,7 @@ this.a+=(in-this.a)*this.fc;
 in-this.a;
 );
 // RBJ Lowpass
-function Lowpass(freq,q)
+function Lowpass(freq,q) local(K,norm)
 (
 K = tan($PI * freq / srate);
 norm = 1.0 / (1 + K / q + K * K);
@@ -165,7 +195,7 @@ this.a2 = (1 - K / q + K * K) * norm;
 );
 
 // RBJ Hipass
-function Hipass(freq,q)
+function Hipass(freq,q)  local(K,norm)
 (  
 K = tan($PI * freq / srate);
 norm = 1 / (1 + K / q + K * K);
@@ -176,7 +206,7 @@ this.a1 = 2 * (K * K - 1) * norm;
 this.a2 = (1 - K / q + K * K) * norm;
 );
 
-function BiquadProcess(in)
+function BiquadProcess(in) local(bout)
 (
 bout = in *this.b0 + this.l1;
 this.l1 = in * this.b1 + this.l2 - this.a1 * bout;
@@ -224,7 +254,7 @@ vcolour.b=b;
 vcolour.a=a;
 );
 
-function ThickLine(x1,y1,x2,y2,w)
+function ThickLine(x1,y1,x2,y2,w) local(dx,dy,len,nx,ny)
 (
 dx=x2-x1;
 dy=y2-y1;
@@ -240,7 +270,7 @@ gfx_line(x1-nx,y1-ny,x1+nx,y1+ny,1);
 gfx_line(x2-nx,y2-ny,x2+nx,y2+ny,1);
 );
 
-function DrawGrid()
+function DrawGrid() local(sx,sy)
 (
 (mouse_cap & 4)==4 && lmc==0 ? drawgrid=drawgrid~1;
 lmc=mouse_cap & 4;
@@ -296,7 +326,7 @@ colorinc(-borderhilight);
 );
 
 
-function HitRect(x,y,rx1,ry1,rx2,ry2)
+function HitRect(x,y,rx1,ry1,rx2,ry2) local(res)
 (
 res=0;
 x>=rx1 && x<=rx2 && y>=ry1 && y<=ry1 ? res=1;
@@ -304,12 +334,11 @@ res;
 );
 
 // r1=radius r2=inner radius percentage
-function RoundDial(x,y,v,r1,r2)
+function RoundDial(x,y,v,r1,r2) local(v)
 (
 x=(x*grid_sx);
 y=(y*grid_sy);
 r2*=r1;
-//v>0.75 ? v=mod(v,0.75);
 v*=0.75;
 v=(v*2*$pi)+$pi/2+$pi/4;
 colorinc(-0.6);
@@ -376,9 +405,9 @@ gfx_drawstr(s);
 
 
 // 0=float 1=int 2=hz 3=display% 4=secs
-function DialString(idx)
+function DialString(idx) local(f,res,v)
 (
-v=Sliders[idx*4+0];
+v=slider(idx+1);
 f=Sliders[idx*4+3]; // flags
 res=idx+512;
 f==0 ? floatString(v,res);
@@ -389,9 +418,9 @@ f==4 ? SecsString(v,res);
 res;
 );
 
-function DialValue(idx)
+function DialValue(idx) local(v,vmin,vmax)
 (
-v=Sliders[idx*4+0];
+v=slider(idx+1);
 vmin=Sliders[idx*4+1];
 vmax=Sliders[idx*4+2];
 (v-vmin)/(vmax-vmin);
@@ -403,10 +432,11 @@ function MouseWheel(idx)
   (
   vmin=Sliders[idx*4+1];
   vmax=Sliders[idx*4+2];
-  pv=(Sliders[idx*4+0]-vmin)/(vmax-vmin);
-  pv+=mouse_wheel/5000;
-  Sliders[idx*4+0]=(clamp(pv,0,1)*(vmax-vmin))+vmin;
-  slider(idx+1)=Sliders[idx*4+0];
+  pv=(slider(idx+1)-vmin)/(vmax-vmin);
+  Sliders[idx*4+3]==1 ?   pv+=mouse_wheel/2500:  pv+=mouse_wheel/5000;
+  slider(idx+1)=(clamp(pv,0,1)*(vmax-vmin))+vmin;
+  Sliders[idx*4+3]==1 ? slider(idx+1)=floor(slider(idx+1));
+  sliderchange(mouseidx+1);
  );
 mouse_wheel=0;
 );
@@ -417,17 +447,27 @@ function MouseDial(x,y,rad,idx)
 (mouse_cap&1)==0 ? mouseidx=-1;
 x=(x*grid_sx);
 y=(y*grid_sy); (mouse_y>=(y-rad)) && (mouse_y<=(y+rad)) && (mouse_x>=(x-rad)) && (mouse_x<=(x+rad))  ?
-(
-MouseWheel(idx);
-((pmc&1)==0) && ((mouse_cap & 1)==1) ?
-(
-mouseidx=idx;
-mouseoy=mouse_y;
-mouseox=mouse_x;
-mousevalue=(Sliders[mouseidx*4+0]-vmin)/(vmax-vmin);
-)
-);
-
+  (
+  MouseWheel(idx);
+  // Hintstring
+  hoveridx=idx;
+  hoverhint=idx+256;
+  // Right click default value
+  ((mouse_cap & 2)==2) ?
+    (
+    slider(idx+1)=Sliders[idx*4];
+    );
+  // Left click drag
+  ((pmc&1)==0) && ((mouse_cap & 1)==1) ?
+    (
+    mouseidx=idx;
+    mouseoy=mouse_y;
+    mouseox=mouse_x;
+    vmin=Sliders[mouseidx*4+1];
+    vmax=Sliders[mouseidx*4+2];
+    mousevalue=(slider(mouseidx+1)-vmin)/(vmax-vmin);
+    );
+  );
 );
 
 
@@ -438,8 +478,8 @@ mouseidx>-1 ?
   mousedelta=mousevalue+(mouse_x-mouseox)*0.0005+(mouseoy-mouse_y)*0.005;
   vmin=Sliders[mouseidx*4+1];
   vmax=Sliders[mouseidx*4+2];
-  Sliders[mouseidx*4+0]=(clamp(mousedelta,0,1)*(vmax-vmin))+vmin;
-  slider(mouseidx+1)=Sliders[mouseidx*4+0];
+  slider(mouseidx+1)=(clamp(mousedelta,0,1)*(vmax-vmin))+vmin;
+  Sliders[mouseidx*4+3]==1 ? slider(mouseidx+1)=floor(slider(mouseidx+1));
   sliderchange(mouseidx+1);
   );
   pmc=mouse_cap;
@@ -450,11 +490,12 @@ RoundDial(x,y,DialValue(idx),cell_len/2,0.4);
 MouseDial(x,y,18,idx);
 pushcolour();
 tcolour.SetRGBA();
-Text(x,y-1,idx,5+256);
+Text(x,y-1.1,idx,5+256);
 vcolour.SetRGBA();
-Text(x,y+1,DialString(idx),5+256);
+Text(x,y+1.1,DialString(idx),5+256);
 popcolour();
 );
+
 function MediumDial(x,y,idx)
 (
 RoundDial(x,y,DialValue(idx),cell_len,0.4);
@@ -463,8 +504,12 @@ pushcolour();
 
 tcolour.SetRGBA();
 Text(x,y-2,idx,5+256);
+
 vcolour.SetRGBA();
+(mouseidx==idx) || (mouseidx<0 && hoveridx==idx)? colorinc(0.5);
+
 Text(x,y+2,DialString(idx),5+256);
+
 popcolour();
 );
 
@@ -482,6 +527,8 @@ popcolour();
 );
 function StartGFX(w,h,gw,gh)
 (
+hoveridx=-1;
+hoverhint=-1;
 gfx_w=w;
 gfx_h=h;
 grid_x=gw;
@@ -505,3 +552,5 @@ ColourStack=GetMem(64,4);
 cstack=0;
 Sliders=GetMem(256,4);
 SliderCount=0;
+SinWindow=GetMem(4096*2);
+CreateSinWindow(SinWindow,4096*2);
