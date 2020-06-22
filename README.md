@@ -4,6 +4,9 @@ Handy lib for reaper JS plugins - UI and General DSP code
 
 Hold ctrl and Left mouse click to toggle UI grid!
 
+![](./Images/UIGrid.png)
+
+
 @slider callbacks no longer work with this system so you can use
 @block and lazy state change to get updates from the sliders.
 
