@@ -25,6 +25,8 @@ function mod(x,y)  ( x=((x/y)-floor(x/y))*y;);
 function clamp(v,minv,maxv) ( v<minv? v=minv; v>maxv? v=maxv; v; );
 function tanh(x)  ( (exp(x)-exp(-x))/(exp(x)+exp(-x)); );
 function sinc(x) ( sin(x)/x;);
+function AmpToDB(amp,lowdb) ( clamp(1-(-20*log10(mag)/lowdb),0,1);  );
+
 // Memory allocation functions *******************************************************************
 function getmem(size)
 (
@@ -46,7 +48,10 @@ DelayParams=getmem(MaxDelays,4); // 0=pointer,1=modphase,2=oldsize,3=DelayArray
 DelayLines=getmem(MaxDelays,MaxDelaySize);
 );
 
-
+function GetArray(idx)
+(
+DelayLines+(idx*MaxDelaySize);
+);
 
 // Sliders  **************************************************************************************
 
@@ -60,8 +65,8 @@ Sliders[SliderCount*4+0]=defaultvalue;
 Sliders[SliderCount*4+1]=vmin;
 Sliders[SliderCount*4+2]=vmax;
 Sliders[SliderCount*4+3]=flags; // 0=float 1=int 2=hz 3=display% 4=secs
-slider(SliderCount+1)=defaultvalue;
-sliderchange(SliderCount+1);
+//slider(SliderCount+1)=defaultvalue;
+//sliderchange(SliderCount+1);
 SliderCount+=1;
 );
 );
@@ -88,10 +93,12 @@ DelayParams[idx*4+2]=ot;
 
 
 // Simple Ring Buffer pitch shifter
-// Fixed size 32768!
+// Fixed size 8192!
 // Cheap and cheerful - has the terrible steel drum sound!
 // Uses 1 delay line
-function PitchShift(idx,in,shiftamount)
+// Probably needs a Lo/Hi pass filter based on the pitch amount
+
+function PitchShiftSynced(idx,in,shiftamount)
 (
 dsize=4096;
 mask=(dsize*2)-1;
@@ -106,6 +113,26 @@ fp=RP-ip;
 ps1=Delay[ip&mask]*(1.0-fp)+Delay[(ip+1)&mask]*fp;
 ps2=Delay[(ip+dsize)&mask]*(1.0-fp)+Delay[(ip+1+dsize)&mask]*fp;
 d1=(RP-WP);
+SinWindow[d1&mask]*ps1+SinWindow[(d1+dsize)&mask]*ps2;
+);
+
+function PitchShiftFreeRunning(idx,in,shiftamount)
+(
+dsize=4096;
+mask=(dsize*2)-1;
+Delay=DelayLines+(idx*MaxDelaySize);
+WP=DelayParams[idx*4+0];
+Delay[WP&mask]=in;
+RP=DelayParams[idx*4+1]; 
+RP+=shiftamount;
+WP+=1;
+DelayParams[idx*4+1]=RP;
+DelayParams[idx*4+0]=WP;
+ip=floor(RP);
+fp=RP-ip;
+ps1=Delay[ip&mask]*(1.0-fp)+Delay[(ip+1)&mask]*fp;
+ps2=Delay[(ip+dsize)&mask]*(1.0-fp)+Delay[(ip+1+dsize)&mask]*fp;
+d1=abs(RP-WP);
 SinWindow[d1&mask]*ps1+SinWindow[(d1+dsize)&mask]*ps2;
 );
 function AllPassDelay(idx,in,t,g) local(out,yy)
@@ -224,12 +251,90 @@ function SecsString(v,str)  ( sprintf(str,"%1.0f ms",v););
 // UI/GFX lib functions  **************************************************************************************
 function gridx(x,w) (floor(gfx_w/w*x););
 function gridy(y,h) (floor(gfx_h/h*y););
-function rgba(r,g,b,a)(gfx_set(r,g,b,a););
+function rgba(r,g,b,a)
+(
+  gfx_set(r,g,b,a);
+  ColourStack[cstack]=gfx_r;
+  ColourStack[cstack+1]=gfx_g;
+  ColourStack[cstack+2]=gfx_b;
+  ColourStack[cstack+3]=gfx_a;
+);
 function colorinc(i)(gfx_r+=i;gfx_g+=i;gfx_b+=i;);
 function colormul(i)(gfx_r*=i;gfx_g*=i;gfx_b*=i;);
 function colordiv(i)(gfx_r/=i;gfx_g/=i;gfx_b/=i;);
-function rectborder(b) ( rborder=b;);
+
 function borderlight(bl) ( borderhilight=bl; );
+
+function pushcolour()
+(
+cstack<64 ? 
+  (
+  ColourStack[cstack]=gfx_r;
+  ColourStack[cstack+1]=gfx_g;
+  ColourStack[cstack+2]=gfx_b;
+  ColourStack[cstack+3]=gfx_a;
+  cstack+=4;
+  );
+);
+
+function pushcolour(r,g,b,a)
+(
+rgba(r,g,b,a);
+cstack<64 ?  cstack+=4;
+);
+
+function peekcolour(ssp)
+(
+ssp+=1;
+(cstack-ssp*4)>=0 ?
+  (
+  gfx_r=ColourStack[cstack-ssp*4];
+  gfx_g=ColourStack[cstack+1-ssp*4];
+  gfx_b=ColourStack[cstack+2-ssp*4];
+  gfx_a=ColourStack[cstack+3-ssp*4];
+  );
+);
+function popcolour()
+(
+cstack>0 ? 
+  (
+  cstack-=4;
+  gfx_r=ColourStack[cstack];
+  gfx_g=ColourStack[cstack+1];
+  gfx_b=ColourStack[cstack+2];
+  gfx_a=ColourStack[cstack+3];
+  );
+);
+
+function Text(x,y,s,f)
+(
+x=(x*grid_sx);
+y=(y*grid_sy);;
+gfx_measurestr(s,w,h);
+gfx_y=y;
+gfx_x=x;
+f&1==1 ? gfx_x=x-w/2; 
+f&2==2 ? gfx_x=x-w;
+f&4==4 ? gfx_y=y-h/2;
+f&8==8 ? gfx_y=y-h;
+gfx_drawstr(s);
+
+);
+
+function TextOutline(x,y,str,format,size)
+(
+    pushcolour();
+    rgba(0.0,0.0,0.0,1); //  shadowcolour
+    size!=0?
+      (
+      Text(x-size,y-size,str,format);
+      Text(x+size,y-size,str,format);
+      Text(x-size,y+size,str,format);
+      Text(x+size,y+size,str,format);
+      );
+    popcolour();        
+    Text(x,y,str,format);
+);
 
 function TitleColour(r,g,b,a)
 (
@@ -279,17 +384,21 @@ drawgrid==1 ?
   l=0;
   sx=floor(mouse_x/grid_sx+0.5);
   sy=floor(mouse_y/grid_sy+0.5);
-  gfx_x=sx*grid_sx+15;
-  gfx_y=sy*grid_sy+10;
-  gfx_set(0.1,0.9,0.1,0.93);
+//  gfx_x=sx*grid_sx+15;
+//  gfx_y=sy*grid_sy+10;
+
+  gfx_setfont(1,"Arial Bold",cell_len);
   ts=#;
-  sprintf(ts,"%d,%d",sx,sy);
-  mouse_x>(gfx_w/2)? gfx_x-=60;
-  mouse_y>(gfx_h/2)? gfx_y-=30;
-  gfx_drawstr(ts);
+  tx=sx+1;
+  ty=sy+0.5;
+  sprintf(ts,"%dx%d",sx,sy);
+  mouse_x>(gfx_w/2)? tx-=4;
+  mouse_y>(gfx_h/2)? ty-=3;
+ // gfx_drawstr(ts);
+
   sx*=grid_sx;
   sy*=grid_sy;
-  gfx_set(0.47,0.9,0.47,0.3);
+  gfx_set(0.47,1,0.47,0.23);
   gfx_rect(sx-5,sy-5,10,10,1);
   while (l<grid_x)
     (
@@ -304,28 +413,35 @@ drawgrid==1 ?
     gfx_line(0,l*gfx_h/grid_y,gfx_w,l*gfx_h/grid_y);
     l+=1;
     );
+    gfx_set(0.1,0.9,0.1,0.93);
+    TextOutline(tx,ty,ts,0,0.1);
   );
 );
 
 
 function roundrect(x1,y1,x2,y2,rad)
 (
-x1=floor(x1*grid_sx)+rborder;
-y1=floor(y1*grid_sy)+rborder;
-x2=floor(x2*grid_sx)-rborder;
-y2=floor(y2*grid_sy)-rborder;
-gfx_rect(x1+rad,y1,(x2-x1)-2*rad,(y2-y1),1);
-gfx_rect(x1,y1+rad,(x2-x1),(y2-y1)-2*rad,1);
-gfx_circle(x1+rad,y1+rad,rad,1,1);
-gfx_circle(x2-rad,y1+rad,rad,1,1);
-gfx_circle(x2-rad,y2-rad,rad,1,1);
-gfx_circle(x1+rad,y2-rad,rad,1,1);
-colorinc(borderhilight);
-gfx_roundrect(x1,y1,x2-x1,y2-y1,rad,1);
-colorinc(-borderhilight);
+rad=floor(rad);
+x1=floor(x1*grid_sx);
+y1=floor(y1*grid_sy);
+x2=floor(x2*grid_sx);
+y2=floor(y2*grid_sy);
+gfx_rect(floor(x1+rad),floor(y1),floor((x2-x1)-2*rad),floor(y2-y1),1);
+gfx_rect(floor(x1),floor(y1+rad),floor(x2-x1),floor((y2-y1)-2*rad),1);
+
+gfx_circle(floor(x1+rad+1),floor(y1+rad),rad,1,1);
+gfx_circle(floor(x2-rad-2),floor(y1+rad),rad,1,1);
+gfx_circle(floor(x2-rad-2),floor(y2-rad-2),rad,1,1);
+gfx_circle(floor(x1+rad+1),floor(y2-rad-2),rad,1,1);
 );
 
-
+function roundrectoutline(x1,y1,x2,y2,rad,bsize)
+(
+peekcolour(1);
+roundrect(x1,y1,x2,y2,rad);
+peekcolour(0);
+roundrect(x1+bsize,y1+bsize,x2-bsize,y2-bsize,rad*0.9);
+);
 function HitRect(x,y,rx1,ry1,rx2,ry2) local(res)
 (
 res=0;
@@ -352,35 +468,6 @@ ThickLine(x+cos(v)*(r1-2),y+sin(v)*(r1-2),x+cos(v)*r2,y+sin(v)*r2,r1/8);
 colorinc(-0.2);
 );
 
-function pushcolour()
-(
-cstack<64 ? 
-  (
-  ColourStack[cstack]=gfx_r;
-  ColourStack[cstack+1]=gfx_g;
-  ColourStack[cstack+2]=gfx_b;
-  ColourStack[cstack+3]=gfx_a;
-  cstack+=4;
-  );
-);
-
-function pushcolour(r,g,b,a)
-(
-pushcolour();
-rgba(r,g,b,a);
-);
-
-function popcolour()
-(
-cstack>0 ? 
-  (
-  cstack-=4;
-  gfx_r=ColourStack[cstack];
-  gfx_g=ColourStack[cstack+1];
-  gfx_b=ColourStack[cstack+2];
-  gfx_a=ColourStack[cstack+3];
-  );
-);
 
 
 function NormalTxt()
@@ -388,20 +475,6 @@ function NormalTxt()
 gfx_set(0.7,0.7,0.7,1);
 );
 
-function Text(x,y,s,f)
-(
-x=(x*grid_sx);
-y=(y*grid_sy);;
-gfx_measurestr(s,w,h);
-gfx_y=y;
-gfx_x=x;
-f&1==1 ? gfx_x=x-w/2; 
-f&2==2 ? gfx_x=x-w;
-f&4==4 ? gfx_y=y-h/2;
-f&8==8 ? gfx_y=y-h;
-gfx_drawstr(s);
-
-);
 
 
 // 0=float 1=int 2=hz 3=display% 4=secs
@@ -527,6 +600,7 @@ popcolour();
 );
 function StartGFX(w,h,gw,gh)
 (
+cstack=0;
 hoveridx=-1;
 hoverhint=-1;
 gfx_w=w;
